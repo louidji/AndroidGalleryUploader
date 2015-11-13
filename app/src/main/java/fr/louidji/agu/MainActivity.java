@@ -1,24 +1,36 @@
 package fr.louidji.agu;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
-import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
 import android.support.design.widget.FloatingActionButton;
 import android.support.design.widget.Snackbar;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.Toolbar;
-import android.view.View;
+import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.ListView;
 
+import java.io.BufferedReader;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 
 public class MainActivity extends AppCompatActivity {
-    private final static String[] PROJECTION = {MediaStore.MediaColumns.DATA,
-            MediaStore.Images.Media.BUCKET_DISPLAY_NAME, MediaStore.Images.Media.DISPLAY_NAME};
+    private final static String[] PROJECTION = {MediaStore.MediaColumns.DATA};
+    private static final String CLASS = "fr.louidji.agu";
 
 
     @Override
@@ -35,7 +47,48 @@ public class MainActivity extends AppCompatActivity {
 
         ListView listView = (ListView) findViewById(R.id.listView);
         listView.setAdapter(adapter);
+// Here, thisActivity is the current activity
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    != PackageManager.PERMISSION_GRANTED) {
 
+                // Should we show an explanation?
+                if (shouldShowRequestPermissionRationale(
+                        Manifest.permission.READ_EXTERNAL_STORAGE)) {
+                    // Explain to the user
+                }
+
+                requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},
+                        1);
+
+            }
+            if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    != PackageManager.PERMISSION_GRANTED) {
+
+                // Should we show an explanation?
+                if (shouldShowRequestPermissionRationale(
+                        Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+                    // Explain to the user
+                }
+
+                requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                        1);
+
+            }
+            if (checkSelfPermission(Manifest.permission.INTERNET)
+                    != PackageManager.PERMISSION_GRANTED) {
+
+                // Should we show an explanation?
+                if (shouldShowRequestPermissionRationale(
+                        Manifest.permission.INTERNET)) {
+                    // Explain to the user
+                }
+
+                requestPermissions(new String[]{Manifest.permission.INTERNET},
+                        1);
+
+            }
+        }
         fab.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -43,13 +96,70 @@ public class MainActivity extends AppCompatActivity {
                         .setAction("Action", null).show();
                 ArrayList<String> images = getAllShownImagesPath();
                 adapter.clear();
-                //adapter.addAll(images);
-
-                for (String image : images)
+                for (String image : images) {
                     adapter.add(image);
+                    try {
+                        push(image);
+                    } catch (IOException e) {
+                        Log.e(CLASS, "IO Erreur sur l'image : " + image, e);
+                    }
+                }
 
             }
         });
+
+
+    }
+
+    private void push(String image) throws IOException {
+        // TODO param URL
+        DataOutputStream out = null;
+        FileInputStream in = null;
+        BufferedReader reader = null;
+        final String url = "http://192.168.1.45:9000/json-file-upload";
+        try {
+            HttpURLConnection con = (HttpURLConnection) (new URL(url)).openConnection();
+            con.setRequestMethod("POST");
+            con.setDoInput(true);
+            con.setDoOutput(true);
+            con.setRequestProperty("Connection", "Keep-Alive");
+            con.setRequestProperty("Content-Type", "image/jpg");
+            con.connect();
+
+            out = new DataOutputStream(con.getOutputStream());
+            in = new FileInputStream(new File(image));
+
+            byte[] buffer = new byte[1024];
+            int bytesRead = -1;
+            while ((bytesRead = in.read(buffer)) != -1) {
+                out.write(buffer, 0, bytesRead);
+            }
+            out.flush();
+
+            final int response = con.getResponseCode();
+            final String responseMessage = con.getResponseMessage();
+            if (200 == response) {
+                Log.d(CLASS, "Upload Data, msg : " + responseMessage);
+            } else {
+                Log.e(CLASS, "Error " + response + ", msg : " + responseMessage);
+            }
+
+            reader = new BufferedReader(new InputStreamReader(con.getInputStream()));
+            String line;
+            while((line = reader.readLine()) != null) {
+                Log.i(CLASS, line);
+                // TODO parse pour recuperer les UUID pour test ulterieur pour suppression
+            }
+
+        } finally {
+            if (null != in) {try {in.close();} finally {
+                    try {if(null != reader) reader.close();} finally {
+                        if (null != out) out.close();
+                    }
+                }
+            }
+        }
+
     }
 
     @Override
@@ -92,17 +202,8 @@ public class MainActivity extends AppCompatActivity {
                     null        // Ordering
             );
             final int column_index_data = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA);
-            final int column_index_bucket_display_name = cursor
-                    .getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME);
-            final int column_index_display_name = cursor
-                    .getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME);
             while (cursor.moveToNext()) {
-
-                StringBuilder sb = new StringBuilder(cursor.getString(column_index_data)).append(" - ").append(cursor.getString(column_index_bucket_display_name))
-                        .append(" - ").append(cursor.getString(column_index_display_name));
-
-
-                listOfAllImages.add(sb.toString());
+                listOfAllImages.add(cursor.getString(column_index_data));
             }
         } finally {
             if (null != cursor)
