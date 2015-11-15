@@ -3,6 +3,7 @@ package fr.louidji.agu;
 import android.Manifest;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
+import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
@@ -17,13 +18,14 @@ import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.ListView;
 
+import org.json.JSONObject;
+
 import java.io.BufferedReader;
 import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
@@ -40,12 +42,14 @@ public class MainActivity extends AppCompatActivity {
         Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
 
-        FloatingActionButton fab = (FloatingActionButton) findViewById(R.id.fab);
+        final FloatingActionButton fab = (FloatingActionButton) findViewById(R.id.fab);
 
-        final ArrayAdapter<String> adapter =
-                new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1);
+        final ArrayAdapter<String> adapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1);
 
-        ListView listView = (ListView) findViewById(R.id.listView);
+        final ListView listView = (ListView) findViewById(R.id.listView);
+
+        adapter.setNotifyOnChange(true);
+
         listView.setAdapter(adapter);
 // Here, thisActivity is the current activity
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -84,26 +88,24 @@ public class MainActivity extends AppCompatActivity {
                     // Explain to the user
                 }
 
-                requestPermissions(new String[]{Manifest.permission.INTERNET},
-                        1);
+                requestPermissions(new String[]{Manifest.permission.INTERNET}, 1);
 
             }
         }
+
+
         fab.setOnClickListener(new View.OnClickListener() {
             @Override
-            public void onClick(View view) {
-                Snackbar.make(view, "Loading...", Snackbar.LENGTH_LONG)
-                        .setAction("Action", null).show();
-                ArrayList<String> images = getAllShownImagesPath();
-                adapter.clear();
-                for (String image : images) {
-                    adapter.add(image);
-                    try {
-                        push(image);
-                    } catch (IOException e) {
-                        Log.e(CLASS, "IO Erreur sur l'image : " + image, e);
+            public void onClick(final View view) {
+                    final String[] images = getAllShownImagesPath();
+                    if (null != images && images.length > 0) {
+                        Snackbar.make(view, "Loading " + images.length + " images", Snackbar.LENGTH_LONG).setAction("Action", null).show();
+
+                        new UploadImage(adapter, view, fab).execute(getAllShownImagesPath());
+                    } else {
+                        Snackbar.make(view, "No images to load", Snackbar.LENGTH_LONG).setAction("Action", null).show();
                     }
-                }
+
 
             }
         });
@@ -111,12 +113,16 @@ public class MainActivity extends AppCompatActivity {
 
     }
 
-    private void push(String image) throws IOException {
-        // TODO param URL
+    private UploadResult push(String image) throws IOException {
+
         DataOutputStream out = null;
         FileInputStream in = null;
         BufferedReader reader = null;
+        UploadResult uploadResult = null;
+        // TODO param URL
         final String url = "http://192.168.1.45:9000/json-file-upload";
+
+        final StringBuffer sb = new StringBuffer();
         try {
             HttpURLConnection con = (HttpURLConnection) (new URL(url)).openConnection();
             con.setRequestMethod("POST");
@@ -127,7 +133,8 @@ public class MainActivity extends AppCompatActivity {
             con.connect();
 
             out = new DataOutputStream(con.getOutputStream());
-            in = new FileInputStream(new File(image));
+            final File file = new File(image);
+            in = new FileInputStream(file);
 
             byte[] buffer = new byte[1024];
             int bytesRead = -1;
@@ -140,24 +147,32 @@ public class MainActivity extends AppCompatActivity {
             final String responseMessage = con.getResponseMessage();
             if (200 == response) {
                 Log.d(CLASS, "Upload Data, msg : " + responseMessage);
+                reader = new BufferedReader(new InputStreamReader(con.getInputStream()));
+                String line;
+
+                while ((line = reader.readLine()) != null) {
+                    Log.i(CLASS, line);
+                    sb.append(line).append("\n");
+                }
+                JSONObject jsonObj = new JSONObject(sb.toString());
+                uploadResult = new UploadResult(jsonObj.getString("uuid"), file.getName(), jsonObj.getString("status"));
             } else {
                 Log.e(CLASS, "Error " + response + ", msg : " + responseMessage);
             }
-
-            reader = new BufferedReader(new InputStreamReader(con.getInputStream()));
-            String line;
-            while((line = reader.readLine()) != null) {
-                Log.i(CLASS, line);
-                // TODO parse pour recuperer les UUID pour test ulterieur pour suppression
-            }
-
         } finally {
-            if (null != in) {try {in.close();} finally {
-                    try {if(null != reader) reader.close();} finally {
+            if (null != in) {
+                try {
+                    in.close();
+                } finally {
+                    try {
+                        if (null != reader) reader.close();
+                    } finally {
                         if (null != out) out.close();
                     }
                 }
             }
+
+            return uploadResult;
         }
 
     }
@@ -184,15 +199,14 @@ public class MainActivity extends AppCompatActivity {
         return super.onOptionsItemSelected(item);
     }
 
-
     /**
      * Getting All Images Path
      *
-     * @return ArrayList with images Path
+     * @return Array with images Path
      */
-    public ArrayList<String> getAllShownImagesPath() {
+    public String[] getAllShownImagesPath() {
         Cursor cursor = null;
-        final ArrayList<String> listOfAllImages = new ArrayList<String>();
+        final String[] listOfAllImages;
         try {
 
             cursor = getContentResolver().query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
@@ -202,14 +216,88 @@ public class MainActivity extends AppCompatActivity {
                     null        // Ordering
             );
             final int column_index_data = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA);
+            //listOfAllImages = new String[cursor.getCount()];
+            listOfAllImages = new String[3]; // FIXME hack pour test => desactiver
+            int i = 0;
             while (cursor.moveToNext()) {
-                listOfAllImages.add(cursor.getString(column_index_data));
+                listOfAllImages[i++] = cursor.getString(column_index_data);
+                if (i > 2) break; // FIXME hack pour test => desactiver
             }
         } finally {
             if (null != cursor)
                 cursor.close();
         }
         return listOfAllImages;
+    }
+
+    private class UploadImage extends AsyncTask<String, UploadResult, Integer> {
+        private final ArrayAdapter<String> adapter;
+        private final View view;
+        private final FloatingActionButton fab;
+
+        UploadImage(final ArrayAdapter<String> adapter, View view, FloatingActionButton fab) {
+            this.adapter = adapter;
+            this.view = view;
+            this.fab = fab;
+            adapter.clear();
+            adapter.notifyDataSetChanged();
+            fab.setEnabled(false);
+            fab.hide();
+        }
+
+        protected Integer doInBackground(String... images) {
+            int count = images.length;
+
+            for (int i = 0; i < count; i++) {
+                try {
+                    UploadResult uploadResult = push(images[i]);
+                    publishProgress(uploadResult);
+                    // Escape early if cancel() is called
+                    if (isCancelled()) break;
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+
+            }
+            return count;
+        }
+
+        protected void onProgressUpdate(UploadResult... results) {
+            // TODO gestion des resultat pour verification
+            final UploadResult result = results[0];
+            Log.i(CLASS, "Push : " + result);
+            adapter.insert(result.fileName + " (" + result.uuid + ") : " + result.status, adapter.getCount());
+            adapter.notifyDataSetChanged();
+        }
+
+        protected void onPostExecute(Integer result) {
+            Log.i(CLASS, "Nb upload : " + result);
+            Snackbar.make(view, "Loaded : " + result, Snackbar.LENGTH_LONG).setAction("Action", null).show();
+            fab.setEnabled(true);
+            fab.show();
+
+        }
+    }
+
+    private class UploadResult {
+        public final String uuid;
+        public final String fileName;
+        public final String status;
+
+        private UploadResult(String uuid, String fileName, String status) {
+            this.uuid = uuid;
+            this.fileName = fileName;
+            this.status = status;
+        }
+
+        @Override
+        public String toString() {
+            return "UploadResult{" +
+                    "uuid='" + uuid + '\'' +
+                    ", fileName='" + fileName + '\'' +
+                    ", status='" + status + '\'' +
+                    '}';
+        }
     }
 
 
