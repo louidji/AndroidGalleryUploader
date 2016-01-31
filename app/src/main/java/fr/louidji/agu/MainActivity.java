@@ -1,11 +1,15 @@
 package fr.louidji.agu;
 
 import android.Manifest;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
+import android.preference.PreferenceManager;
 import android.provider.MediaStore;
 import android.support.design.widget.FloatingActionButton;
 import android.support.design.widget.Snackbar;
@@ -18,6 +22,9 @@ import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.ListView;
 
+import org.java_websocket.client.WebSocketClient;
+import org.java_websocket.handshake.ServerHandshake;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -26,14 +33,32 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.HttpURLConnection;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
-import java.util.ArrayList;
+import java.util.Hashtable;
 
 public class MainActivity extends AppCompatActivity {
     private final static String[] PROJECTION = {MediaStore.MediaColumns.DATA};
     private static final String CLASS = "fr.louidji.agu";
+    private SharedPreferences pref;
+    private String url;
+    private String uploadUrl;
+    private String wsUrl;
+    private WebSocketClient mWebSocketClient;
+    private Hashtable<String, String> images = new Hashtable<>();
 
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (null != mWebSocketClient) {
+            mWebSocketClient.close();
+            mWebSocketClient = null;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -48,10 +73,12 @@ public class MainActivity extends AppCompatActivity {
 
         final ListView listView = (ListView) findViewById(R.id.listView);
 
+        pref = PreferenceManager.getDefaultSharedPreferences(this);
+
         adapter.setNotifyOnChange(true);
 
         listView.setAdapter(adapter);
-// Here, thisActivity is the current activity
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     != PackageManager.PERMISSION_GRANTED) {
@@ -97,34 +124,125 @@ public class MainActivity extends AppCompatActivity {
         fab.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(final View view) {
+                if (loadConf()) {
                     final String[] images = getAllShownImagesPath();
                     if (null != images && images.length > 0) {
-                        Snackbar.make(view, "Loading " + images.length + " images", Snackbar.LENGTH_LONG).setAction("Action", null).show();
+                        Snackbar.make(view, "Sending " + images.length + " images", Snackbar.LENGTH_LONG).setAction("Action", null).show();
 
                         new UploadImage(adapter, view, fab).execute(getAllShownImagesPath());
+
+
                     } else {
                         Snackbar.make(view, "No images to load", Snackbar.LENGTH_LONG).setAction("Action", null).show();
                     }
-
+                }
 
             }
         });
 
 
+        initWS();
+
     }
 
-    private UploadResult push(String image) throws IOException {
+    private boolean loadConf() {
+        if (pref.contains("url")) {
+            url = pref.getString("url", null);
+            if (url.length() > 11) {
+                uploadUrl = url + "/json-file-upload";
+                wsUrl = (url.startsWith("https://") ?
+                        "wss://" + url.substring(8) : "ws://" + url.substring(7) + "/ws");
+
+                return true;
+            }
+        }
+        startSettings();
+        return false;
+
+    }
+
+    private void initWS() {
+        if (loadConf()) {
+            URI uri;
+            try {
+                uri = new URI(wsUrl);
+            } catch (URISyntaxException e) {
+                Log.e("Websocket", "Error " + e.getMessage(), e);
+                return;
+            }
+
+            mWebSocketClient = new WebSocketClient(uri) {
+                @Override
+                public void onOpen(ServerHandshake serverHandshake) {
+                    Log.i("Websocket", "Opened");
+                }
+
+                @Override
+                public void onMessage(String s) {
+                    Log.i("Websocket", s);
+                    JSONObject jsonObj = null;
+                    try {
+                        jsonObj = new JSONObject(s);
+                        final String UUID = jsonObj.getString("uuid");
+                        final boolean done = jsonObj.getBoolean("done");
+
+                        if (done) {
+                            // TODO suppression de l'image... si done ...
+                            int count = 0;
+                            while (!images.containsKey(UUID) && count++ < 10) {
+                                try {
+                                    // WTF ws trop rapide...
+                                    Thread.currentThread().sleep(100l);
+                                } catch (InterruptedException e) {
+                                    e.printStackTrace();
+                                }
+                            }
+                            Log.i("Websocket", UUID + " ? " + done + ", file : " + images.get(UUID));
+
+                        } else {
+                            // TODO affichage avec info...
+                        }
+
+
+                    } catch (JSONException e) {
+                        Log.e("Websocket", "Error " + e.getMessage(), e);
+                    }
+
+//                    runOnUiThread(new Runnable() {
+//                        @Override
+//                        public void run() {
+//                            TextView textView = (TextView) findViewById(R.id.messages);
+//                            textView.setText(textView.getText() + "\n" + message);
+//                        }
+//                    });
+                }
+
+                @Override
+                public void onClose(int i, String s, boolean b) {
+                    Log.i("Websocket", "Closed " + s);
+                }
+
+                @Override
+                public void onError(Exception e) {
+                    Log.e("Websocket", "Error " + e.getMessage(), e);
+                }
+            };
+            mWebSocketClient.connect();
+        }
+
+
+    }
+
+    private UploadResult push(String image) throws IOException, JSONException {
 
         DataOutputStream out = null;
         FileInputStream in = null;
         BufferedReader reader = null;
         UploadResult uploadResult = null;
-        // TODO param URL
-        final String url = "http://192.168.1.45:9000/json-file-upload";
-
-        final StringBuffer sb = new StringBuffer();
+        final StringBuilder sb = new StringBuilder();
+        final File file = new File(image);
         try {
-            HttpURLConnection con = (HttpURLConnection) (new URL(url)).openConnection();
+            HttpURLConnection con = (HttpURLConnection) (new URL(uploadUrl)).openConnection();
             con.setRequestMethod("POST");
             con.setDoInput(true);
             con.setDoOutput(true);
@@ -133,7 +251,7 @@ public class MainActivity extends AppCompatActivity {
             con.connect();
 
             out = new DataOutputStream(con.getOutputStream());
-            final File file = new File(image);
+
             in = new FileInputStream(file);
 
             byte[] buffer = new byte[1024];
@@ -144,21 +262,22 @@ public class MainActivity extends AppCompatActivity {
             out.flush();
 
             final int response = con.getResponseCode();
-            final String responseMessage = con.getResponseMessage();
             if (200 == response) {
-                Log.d(CLASS, "Upload Data, msg : " + responseMessage);
                 reader = new BufferedReader(new InputStreamReader(con.getInputStream()));
                 String line;
 
                 while ((line = reader.readLine()) != null) {
-                    Log.i(CLASS, line);
-                    sb.append(line).append("\n");
+                    //Log.i(CLASS, line);
+                    sb.append(line);
                 }
                 JSONObject jsonObj = new JSONObject(sb.toString());
                 uploadResult = new UploadResult(jsonObj.getString("uuid"), file.getName(), jsonObj.getString("status"));
+                images.put(uploadResult.uuid, uploadResult.fileName);
             } else {
-                Log.e(CLASS, "Error " + response + ", msg : " + responseMessage);
+                Log.e(CLASS, "Error " + response + ", msg : " + con.getResponseMessage());
             }
+            con.disconnect();
+            return uploadResult;
         } finally {
             if (null != in) {
                 try {
@@ -172,7 +291,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
 
-            return uploadResult;
+
         }
 
     }
@@ -193,10 +312,15 @@ public class MainActivity extends AppCompatActivity {
 
         //noinspection SimplifiableIfStatement
         if (id == R.id.action_settings) {
+            startSettings();
             return true;
         }
 
         return super.onOptionsItemSelected(item);
+    }
+
+    private void startSettings() {
+        this.startActivity(new Intent("SETTINGS"));
     }
 
     /**
@@ -217,7 +341,7 @@ public class MainActivity extends AppCompatActivity {
             );
             final int column_index_data = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA);
             //listOfAllImages = new String[cursor.getCount()];
-            listOfAllImages = new String[3]; // FIXME hack pour test => desactiver
+            listOfAllImages = new String[2]; // FIXME hack pour test => desactiver
             int i = 0;
             while (cursor.moveToNext()) {
                 listOfAllImages[i++] = cursor.getString(column_index_data);
@@ -234,6 +358,7 @@ public class MainActivity extends AppCompatActivity {
         private final ArrayAdapter<String> adapter;
         private final View view;
         private final FloatingActionButton fab;
+        private Exception exception = null;
 
         UploadImage(final ArrayAdapter<String> adapter, View view, FloatingActionButton fab) {
             this.adapter = adapter;
@@ -245,37 +370,60 @@ public class MainActivity extends AppCompatActivity {
             fab.hide();
         }
 
+        @Override
+        protected void onPreExecute() {
+            super.onPreExecute();
+        }
+
+        @Override
         protected Integer doInBackground(String... images) {
             int count = images.length;
-
-            for (int i = 0; i < count; i++) {
+            int i = 0;
+            for (; i < count; i++) {
                 try {
                     UploadResult uploadResult = push(images[i]);
                     publishProgress(uploadResult);
                     // Escape early if cancel() is called
                     if (isCancelled()) break;
-                } catch (IOException e) {
-                    e.printStackTrace();
+                } catch (IOException | JSONException e) {
+                    Log.e(CLASS, e.getMessage(), e);
+                    exception = e;
+
+
+                    break;
                 }
 
             }
-            return count;
+            return i;
         }
 
+        @Override
         protected void onProgressUpdate(UploadResult... results) {
-            // TODO gestion des resultat pour verification
-            final UploadResult result = results[0];
-            Log.i(CLASS, "Push : " + result);
-            adapter.insert(result.fileName + " (" + result.uuid + ") : " + result.status, adapter.getCount());
-            adapter.notifyDataSetChanged();
+            if (null != results && results.length > 0 && null != results[0]) {
+                final UploadResult result = results[0];
+                Log.i(CLASS, "Push : " + result);
+                adapter.insert(result.fileName + " (" + result.uuid + ") : " + result.status, adapter.getCount());
+                adapter.notifyDataSetChanged();
+            }
         }
 
+        @Override
         protected void onPostExecute(Integer result) {
-            Log.i(CLASS, "Nb upload : " + result);
-            Snackbar.make(view, "Loaded : " + result, Snackbar.LENGTH_LONG).setAction("Action", null).show();
+            if (null != exception) {
+                AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+                StringWriter stringWriter = new StringWriter();
+                PrintWriter printWriter = new PrintWriter(stringWriter);
+                exception.printStackTrace(printWriter);
+                builder.setTitle(R.string.alert).setMessage(stringWriter.toString())
+                        .setNeutralButton(R.string.OK, null).setCancelable(true)
+                        .setIcon(android.R.drawable.ic_dialog_alert)
+                        .create().show();
+            } else {
+                Log.i(CLASS, "Nb upload : " + result);
+                Snackbar.make(view, "Loaded : " + result, Snackbar.LENGTH_LONG).setAction("Action", null).show();
+            }
             fab.setEnabled(true);
             fab.show();
-
         }
     }
 
