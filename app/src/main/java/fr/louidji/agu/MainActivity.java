@@ -185,7 +185,7 @@ public class MainActivity extends AppCompatActivity {
                 @Override
                 public void onMessage(String s) {
                     Log.d("Websocket", s);
-                    JSONObject jsonObj = null;
+                    JSONObject jsonObj;
                     try {
                         jsonObj = new JSONObject(s);
                         final String UUID = jsonObj.getString("uuid");
@@ -207,17 +207,14 @@ public class MainActivity extends AppCompatActivity {
                             ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, uploadResult.image.id);
                             if (done) {
                                 uploadResult.status = "Image integrate";
-                                //uploadResult.image.delete();
 
-                                //getContentResolver().delete(Uri.fromFile(uploadResult.image), null,null);
-                                if (1 == getContentResolver().delete(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, BaseColumns._ID + "=" + uploadResult.image.id, null)) {
+                                if (1 == getContentResolver().delete(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, BaseColumns._ID + "=" + uploadResult.image
+                                        .id, null)) {
                                     Log.d("Delete", "Delete " + uploadResult.image.data);
                                 }
 
                             } else {
                                 uploadResult.status = "Error on integreting image";
-                                //getContentResolver().delete(Uri.fromFile(uploadResult.image), null, null);
-                                int i = getContentResolver().delete(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, BaseColumns._ID + "=" + uploadResult.image.id, null);
                             }
                             runOnUiThread(new Runnable() {
                                 @Override
@@ -269,7 +266,7 @@ public class MainActivity extends AppCompatActivity {
             in = new FileInputStream(file);
 
             byte[] buffer = new byte[1024];
-            int bytesRead = -1;
+            int bytesRead;
             while ((bytesRead = in.read(buffer)) != -1) {
                 out.write(buffer, 0, bytesRead);
             }
@@ -291,14 +288,14 @@ public class MainActivity extends AppCompatActivity {
             con.disconnect();
             return uploadResult;
         } finally {
-            if (null != in) {
+            if (null != out) {
                 try {
-                    in.close();
+                    out.close();
                 } finally {
                     try {
-                        if (null != reader) reader.close();
+                        if (null != in) in.close();
                     } finally {
-                        if (null != out) out.close();
+                        if (null != reader) reader.close();
                     }
                 }
             }
@@ -401,7 +398,6 @@ public class MainActivity extends AppCompatActivity {
                     Log.e(CLASS, e.getMessage(), e);
                     exception = e;
 
-
                     break;
                 }
 
@@ -444,11 +440,11 @@ public class MainActivity extends AppCompatActivity {
     private class Image {
         public final long id;
         public final String data;
+
         public Image(long id, String data) {
             this.id = id;
             this.data = data;
         }
-
 
 
     }
