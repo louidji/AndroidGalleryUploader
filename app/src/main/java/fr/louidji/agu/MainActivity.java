@@ -53,6 +53,8 @@ public class MainActivity extends AppCompatActivity {
     private WebSocketClient mWebSocketClient;
     private Hashtable<String, Integer> adapters = new Hashtable<>();
     private ArrayAdapter<UploadResult> adapter;
+    private String androidUUID;
+
 
     @Override
     protected void onDestroy() {
@@ -66,6 +68,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
         setContentView(R.layout.activity_main);
         Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
@@ -158,6 +161,14 @@ public class MainActivity extends AppCompatActivity {
                 wsUrl = (url.startsWith("https://") ?
                         "wss://" + url.substring(8) : "ws://" + url.substring(7) + "/ws");
 
+                androidUUID = pref.getString("androidUUID", null);
+                if(null == androidUUID) {
+                    SharedPreferences.Editor editor = pref.edit();
+                    androidUUID = java.util.UUID.randomUUID().toString();
+                    editor.putString("androidUUI", androidUUID);
+                    editor.commit();
+                }
+
                 return true;
             }
         }
@@ -239,6 +250,8 @@ public class MainActivity extends AppCompatActivity {
                 }
             };
             mWebSocketClient.connect();
+
+            mWebSocketClient.send("{id: "+androidUUID+"}");
         }
 
 
@@ -259,9 +272,12 @@ public class MainActivity extends AppCompatActivity {
             con.setDoOutput(true);
             con.setRequestProperty("Connection", "Keep-Alive");
             con.setRequestProperty("Content-Type", "image/jpg");
+            con.setRequestProperty("Client-UUID", androidUUID);
+            con.setUseCaches(false);
             con.connect();
 
             out = new DataOutputStream(con.getOutputStream());
+
 
             in = new FileInputStream(file);
 
@@ -281,7 +297,7 @@ public class MainActivity extends AppCompatActivity {
                     sb.append(line);
                 }
                 JSONObject jsonObj = new JSONObject(sb.toString());
-                uploadResult = new UploadResult(jsonObj.getString("uuid"), image, jsonObj.getString("status"));
+                uploadResult = new UploadResult(jsonObj.getString("androidUUID"), image, jsonObj.getString("status"));
             } else {
                 Log.e(CLASS, "Error " + response + ", msg : " + con.getResponseMessage());
             }
