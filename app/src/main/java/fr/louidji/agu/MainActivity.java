@@ -138,7 +138,6 @@ public class MainActivity extends AppCompatActivity {
                     final Image[] images = getAllShownImagesPath();
                     if (null != images && images.length > 0) {
                         Snackbar.make(view, "Sending " + images.length + " images", Snackbar.LENGTH_LONG).setAction("Action", null).show();
-
                         new UploadImage(adapter, view, fab).execute(getAllShownImagesPath());
                     } else {
                         Snackbar.make(view, "No images to load", Snackbar.LENGTH_LONG).setAction("Action", null).show();
@@ -147,9 +146,6 @@ public class MainActivity extends AppCompatActivity {
 
             }
         });
-
-
-        initWS();
 
     }
 
@@ -179,79 +175,88 @@ public class MainActivity extends AppCompatActivity {
 
     private void initWS() {
         if (loadConf()) {
-            URI uri;
-            try {
-                uri = new URI(wsUrl);
-            } catch (URISyntaxException e) {
-                Log.e("Websocket", "Error " + e.getMessage(), e);
-                return;
-            }
-
-            mWebSocketClient = new WebSocketClient(uri) {
-                @Override
-                public void onOpen(ServerHandshake serverHandshake) {
-                    Log.d("Websocket", "Opened");
+            if (null == mWebSocketClient) {
+                URI uri;
+                try {
+                    uri = new URI(wsUrl);
+                } catch (URISyntaxException e) {
+                    Log.e("Websocket", "Error " + e.getMessage(), e);
+                    return;
                 }
+                mWebSocketClient = new WebSocketClient(uri) {
+                    @Override
+                    public void onOpen(ServerHandshake serverHandshake) {
+                        Log.d("Websocket", "Opened");
+                    }
 
-                @Override
-                public void onMessage(String s) {
-                    Log.d("Websocket", s);
-                    JSONObject jsonObj;
-                    try {
-                        jsonObj = new JSONObject(s);
-                        final String UUID = jsonObj.getString("uuid");
-                        final boolean done = jsonObj.getBoolean("done");
-                        int count = 0;
+                    @Override
+                    public void onMessage(String s) {
+                        Log.i("Websocket", s);
+                        JSONObject jsonObj;
+                        try {
+                            jsonObj = new JSONObject(s);
+                            final String UUID = jsonObj.getString("uuid");
+                            final boolean done = jsonObj.getBoolean("done");
+                            int count = 0;
 
-                        while (!adapters.containsKey(UUID) && count++ < 10) {
-                            try {
-                                // WTF ws trop rapide...
-                                Thread.currentThread().sleep(100l);
-                            } catch (InterruptedException e) {
-                                e.printStackTrace();
-                            }
-                        }
-                        Integer pos = adapters.get(UUID);
-                        if (pos != null) {
-                            UploadResult uploadResult = adapter.getItem(pos);
-                            Log.d("Websocket", UUID + " ? " + done + ", image : " + uploadResult.image);
-                            ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, uploadResult.image.id);
-                            if (done) {
-                                uploadResult.status = "Image integrate";
-
-                                if (1 == getContentResolver().delete(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, BaseColumns._ID + "=" + uploadResult.image
-                                        .id, null)) {
-                                    Log.d("Delete", "Delete " + uploadResult.image.data);
+                            while (!adapters.containsKey(UUID) && count++ < 10) {
+                                try {
+                                    // WTF ws trop rapide...
+                                    Thread.currentThread().sleep(10l);
+                                } catch (InterruptedException e) {
+                                    e.printStackTrace();
                                 }
-
-                            } else {
-                                uploadResult.status = "Error on integreting image";
                             }
-                            runOnUiThread(new Runnable() {
-                                @Override
-                                public void run() {
-                                    adapter.notifyDataSetChanged();
+                            Integer pos = adapters.get(UUID);
+                            if (pos != null) {
+                                UploadResult uploadResult = adapter.getItem(pos);
+                                Log.d("Websocket", UUID + " ? " + done + ", image : " + uploadResult.image);
+                                ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, uploadResult.image.id);
+                                if (done) {
+                                    uploadResult.status = "Image integrate";
+
+                                    if (1 == getContentResolver().delete(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, BaseColumns._ID + "=" + uploadResult.image
+
+                                            .id, null)) {
+                                        Log.d("Delete", "Delete " + uploadResult.image.data);
+                                    }
+
+                                } else {
+                                    uploadResult.status = "Error on integreting image";
                                 }
-                            });
+                                runOnUiThread(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        adapter.notifyDataSetChanged();
+                                    }
+                                });
+                            }
+                        } catch (JSONException e) {
+                            Log.e("Websocket", "Error " + e.getMessage(), e);
                         }
-                    } catch (JSONException e) {
+                    }
+
+                    @Override
+                    public void onClose(int i, String s, boolean b) {
+                        Log.d("Websocket", "Closed " + s);
+                    }
+
+                    @Override
+                    public void onError(Exception e) {
                         Log.e("Websocket", "Error " + e.getMessage(), e);
                     }
-                }
+                };
 
-                @Override
-                public void onClose(int i, String s, boolean b) {
-                    Log.d("Websocket", "Closed " + s);
-                }
-
-                @Override
-                public void onError(Exception e) {
+                try {
+                    mWebSocketClient.connectBlocking();
+                    mWebSocketClient.send("{\"id\": \"" + androidUUID + "\"}");
+                } catch (InterruptedException e) {
+                    mWebSocketClient.close();
+                    mWebSocketClient = null;
                     Log.e("Websocket", "Error " + e.getMessage(), e);
                 }
-            };
-            mWebSocketClient.connect();
+            }
 
-            mWebSocketClient.send("{id: "+androidUUID+"}");
         }
 
 
@@ -296,8 +301,9 @@ public class MainActivity extends AppCompatActivity {
                 while ((line = reader.readLine()) != null) {
                     sb.append(line);
                 }
+                Log.i(CLASS, sb.toString());
                 JSONObject jsonObj = new JSONObject(sb.toString());
-                uploadResult = new UploadResult(jsonObj.getString("androidUUID"), image, jsonObj.getString("status"));
+                uploadResult = new UploadResult(jsonObj.getString("uuid"), image, jsonObj.getString("status"));
             } else {
                 Log.e(CLASS, "Error " + response + ", msg : " + con.getResponseMessage());
             }
@@ -398,6 +404,7 @@ public class MainActivity extends AppCompatActivity {
         @Override
         protected void onPreExecute() {
             super.onPreExecute();
+            initWS();
         }
 
         @Override
@@ -450,6 +457,7 @@ public class MainActivity extends AppCompatActivity {
             }
             fab.setEnabled(true);
             fab.show();
+
         }
     }
 
