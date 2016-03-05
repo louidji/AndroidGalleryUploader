@@ -250,7 +250,7 @@ public class MainActivity extends AppCompatActivity {
                 try {
                     mWebSocketClient.connectBlocking();
                     mWebSocketClient.send("{\"id\": \"" + androidUUID + "\"}");
-                } catch (InterruptedException e) {
+                } catch (InterruptedException | org.java_websocket.exceptions.WebsocketNotConnectedException e) {
                     mWebSocketClient.close();
                     mWebSocketClient = null;
                     Log.e("Websocket", "Error " + e.getMessage(), e);
